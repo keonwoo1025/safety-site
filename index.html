@@ -1,199 +1,332 @@
-/** == 환경설정 == */
-const SPREADSHEET_ID = 'YOUR_SPREADSHEET_ID';   // ← 스프레드시트 ID
-const FOLDER_ID = 'YOUR_DRIVE_FOLDER_ID';       // ← 드라이브 폴더 ID
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>안전관리 대시보드 (무료)</title>
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- PWA manifest (파일 따로 생성 필요: manifest.json) -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#0ea5e9" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🦺</text></svg>">
+  <style>
+    html, body { height: 100%; }
+    .tab { cursor: pointer; }
+    .hidden-tab { display: none; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900">
+  <header class="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+      <div class="text-2xl">🦺</div>
+      <div>
+        <h1 class="text-xl font-bold">안전관리 대시보드</h1>
+        <p class="text-xs text-slate-500">재해통계 · 위험성평가 · 개선조치 · 제안 · 제보</p>
+      </div>
+      <div class="ml-auto flex items-center gap-2">
+        <button id="installBtn" class="px-3 py-1.5 rounded-xl bg-sky-600 text-white text-sm hidden">앱으로 설치</button>
+        <a href="#report" class="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-sm">위험요인 제보</a>
+      </div>
+    </div>
+  </header>
 
-/** == 공통 == */
-function _ss() { return SpreadsheetApp.openById(SPREADSHEET_ID); }
-function _sheet(name) { return _ss().getSheetByName(name); }
-function _json(obj, code) {
-  const out = ContentService.createTextOutput(JSON.stringify(obj));
-  out.setMimeType(ContentService.MimeType.JSON);
-  const resp = out;
-  return out;
-}
-function _cors(out) {
-  // Web App 레벨 CORS 허용(간단)
-  return out; // (Apps Script는 응답 헤더 제약이 있어, 프론트 fetch는 동일 URL로 직접 호출 권장)
-}
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    <!-- 탭 -->
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4">
+      <button class="tab px-3 py-2 rounded-2xl bg-white shadow" data-target="tab-stats">재해통계</button>
+      <button class="tab px-3 py-2 rounded-2xl bg-white shadow" data-target="tab-risk">위험성평가 진행도</button>
+      <button class="tab px-3 py-2 rounded-2xl bg-white shadow" data-target="tab-actions">개선조치 현황</button>
+      <button class="tab px-3 py-2 rounded-2xl bg-white shadow" data-target="tab-ideas">근로자 제안함</button>
+      <button class="tab px-3 py-2 rounded-2xl bg-white shadow" data-target="tab-report">위험요인 제보</button>
+    </div>
 
-/** == 라우팅 == */
-function doGet(e) {
-  const action = (e.parameter.action || '').toString();
-  try {
-    if (action === 'stats')     return _cors(_json(getStats()));
-    if (action === 'riskProgress') return _cors(_json(getRiskProgress()));
-    if (action === 'actions')   return _cors(_json(listActions()));
-    if (action === 'ideas')     return _cors(_json(listIdeas()));
-    if (action === 'hazards')   return _cors(_json(listHazards()));
-    return _cors(_json({ ok:false, error:'unknown action' }));
-  } catch(err) {
-    return _cors(_json({ ok:false, error:String(err) }, 500));
-  }
-}
+    <!-- 재해통계 -->
+    <section id="tab-stats" class="tab-pane bg-white rounded-2xl p-4 shadow">
+      <h2 class="font-semibold mb-3">재해통계 (월별)</h2>
+      <canvas id="incidentsChart" height="120"></canvas>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4" id="kpiCards">
+        <!-- KPI 카드 자동 렌더링 -->
+      </div>
+    </section>
 
-function doPost(e) {
-  const action = (e.parameter.action || '').toString();
-  try {
-    if (action === 'submitHazard') return _cors(_json(submitHazard(e)));
-    return _cors(_json({ ok:false, error:'unknown action' }));
-  } catch(err) {
-    return _cors(_json({ ok:false, error:String(err) }, 500));
-  }
-}
+    <!-- 위험성평가 진행도 -->
+    <section id="tab-risk" class="tab-pane hidden-tab bg-white rounded-2xl p-4 shadow">
+      <h2 class="font-semibold mb-3">위험성평가 진행도</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="p-4 rounded-xl border">
+          <h3 class="font-medium mb-2">전체 진행률</h3>
+          <div class="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+            <div id="riskProgressBar" class="h-3 bg-emerald-500" style="width:0%"></div>
+          </div>
+          <p class="text-sm text-slate-500 mt-2" id="riskProgressText">0% 완료</p>
+        </div>
+        <div class="p-4 rounded-xl border">
+          <h3 class="font-medium mb-2">부서별 진행률</h3>
+          <ul id="deptProgress" class="text-sm space-y-1"></ul>
+        </div>
+      </div>
+    </section>
 
-/** == 통계 == */
-function getStats() {
-  const shInc = _sheet('Incidents');
-  let months = [], byMonth = [];
-  // 최근 12개월 라벨 만들기
-  const now = new Date();
-  for (let i=11; i>=0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
-    const label = Utilities.formatDate(d, Session.getScriptTimeZone(), 'YYYY-MM');
-    months.push(label);
-    byMonth.push(0);
-  }
+    <!-- 개선조치 현황 -->
+    <section id="tab-actions" class="tab-pane hidden-tab bg-white rounded-2xl p-4 shadow">
+      <h2 class="font-semibold mb-3">개선조치 현황</h2>
+      <div class="overflow-auto">
+        <table class="min-w-full text-sm">
+          <thead>
+            <tr class="text-left border-b">
+              <th class="py-2 pr-4">번호</th>
+              <th class="py-2 pr-4">내용</th>
+              <th class="py-2 pr-4">담당</th>
+              <th class="py-2 pr-4">기한</th>
+              <th class="py-2 pr-4">상태</th>
+            </tr>
+          </thead>
+          <tbody id="actionsBody"></tbody>
+        </table>
+      </div>
+    </section>
 
-  // Incidents 집계
-  const range = shInc.getDataRange().getValues(); // [date,type,lostDays]
-  let thisYearIncidents = 0;
-  let lostDays = 0;
-  for (let r=1; r<range.length; r++) {
-    const [date, type, lost] = range[r];
-    if (!date) continue;
-    const dt = new Date(date);
-    const ym = Utilities.formatDate(new Date(dt.getFullYear(), dt.getMonth(), 1), Session.getScriptTimeZone(), 'YYYY-MM');
-    const idx = months.indexOf(ym);
-    if (idx >= 0) byMonth[idx] += 1;
-    if (dt.getFullYear() === now.getFullYear()) thisYearIncidents += 1;
-    if (lost) lostDays += Number(lost) || 0;
-  }
+    <!-- 근로자 제안함 -->
+    <section id="tab-ideas" class="tab-pane hidden-tab bg-white rounded-2xl p-4 shadow">
+      <h2 class="font-semibold mb-3">근로자 제안</h2>
+      <ul id="ideasList" class="space-y-3"></ul>
+    </section>
 
-  // 개선조치 진행률: Actions 시트에서 status == '완료' 비율
-  const shAct = _sheet('Actions');
-  const rowsAct = shAct.getDataRange().getValues(); // [title,owner,due,status]
-  let total=0, done=0;
-  for (let r=1; r<rowsAct.length; r++) {
-    if (!rowsAct[r][0]) continue;
-    total++;
-    if ((rowsAct[r][3]||'').toString().trim() === '완료') done++;
-  }
-  const actionsProgress = total ? Math.round((done/total)*100) : 0;
+    <!-- 위험요인 제보 (폼) -->
+    <section id="tab-report" class="tab-pane hidden-tab bg-white rounded-2xl p-4 shadow">
+      <h2 class="font-semibold mb-3">위험요인 제보</h2>
+      <form id="reportForm" class="space-y-3" enctype="multipart/form-data">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-sm">작성자(닉네임 가능)</label>
+            <input name="user" class="mt-1 w-full border rounded-xl p-2" placeholder="홍길동 또는 익명" required />
+          </div>
+          <div>
+            <label class="text-sm">위치/공정</label>
+            <input name="location" class="mt-1 w-full border rounded-xl p-2" placeholder="압연 2호기" required />
+          </div>
+        </div>
+        <div>
+          <label class="text-sm">제목</label>
+          <input name="title" class="mt-1 w-full border rounded-xl p-2" placeholder="케이블 피복 손상" required />
+        </div>
+        <div>
+          <label class="text-sm">내용</label>
+          <textarea name="description" class="mt-1 w-full border rounded-xl p-2" rows="4" placeholder="상세 내용을 입력해 주세요" required></textarea>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-sm">위험수준</label>
+            <select name="riskLevel" class="mt-1 w-full border rounded-xl p-2">
+              <option value="낮음">낮음</option>
+              <option value="보통">보통</option>
+              <option value="높음">높음</option>
+              <option value="긴급">긴급</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-sm">사진 (선택)</label>
+            <input type="file" name="photo" accept="image/*" capture="environment" class="mt-1 w-full border rounded-xl p-2" />
+          </div>
+        </div>
+        <button class="px-4 py-2 rounded-2xl bg-emerald-600 text-white">제보 제출</button>
+        <p id="reportMsg" class="text-sm"></p>
+      </form>
 
-  // 제안 수
-  const shIdeas = _sheet('Ideas');
-  const ideasValues = shIdeas.getDataRange().getValues();
-  const ideasCount = Math.max(ideasValues.length-1, 0);
+      <div class="mt-6">
+        <h3 class="font-medium mb-2">최근 제보</h3>
+        <ul id="reportsList" class="space-y-3"></ul>
+      </div>
+    </section>
+  </main>
 
-  return {
-    months: months,
-    incidentsByMonth: byMonth,
-    thisYearIncidents: thisYearIncidents,
-    lostDays: lostDays,
-    actionsProgress: actionsProgress,
-    ideasCount: ideasCount
-  };
-}
+  <footer class="max-w-6xl mx-auto px-4 pb-10 text-xs text-slate-500">
+    <p>100% 무료 스택(구글 시트/앱스 스크립트 + GitHub Pages). 이 페이지는 PWA로 설치 가능하며, 카메라 업로드를 지원합니다.</p>
+  </footer>
 
-/** == 위험성평가 진행도 == */
-function getRiskProgress() {
-  const sh = _sheet('RiskProgress');
-  const rows = sh.getDataRange().getValues(); // [dept,progress]
-  let list = [];
-  let sum = 0, n = 0;
-  for (let r=1; r<rows.length; r++) {
-    const dept = rows[r][0];
-    const prog = Number(rows[r][1]) || 0;
-    if (!dept && !prog) continue;
-    list.push({ dept: String(dept||''), progress: Math.max(0, Math.min(100, prog)) });
-    sum += prog; n++;
-  }
-  const overall = n ? sum/n : 0;
-  return { overall, byDept: list };
-}
+  <script>
+    // ======== 환경설정: 본인의 Apps Script 웹앱 URL 로 교체 ========
+    const API_BASE = "YOUR_APPS_SCRIPT_WEBAPP_URL"; // 예: https://script.google.com/macros/s/AKfycb.../exec
 
-/** == 개선조치 목록 == */
-function listActions() {
-  const sh = _sheet('Actions');
-  const rows = sh.getDataRange().getValues(); // [title,owner,due,status]
-  const items = [];
-  for (let r=1; r<rows.length; r++) {
-    const [title, owner, due, status] = rows[r];
-    if (!title) continue;
-    items.push({
-      title: String(title),
-      owner: owner ? String(owner) : '',
-      due: due ? Utilities.formatDate(new Date(due), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '',
-      status: status ? String(status) : ''
+    // ======== PWA 설치 버튼 ========
+    let deferredPrompt;
+    const installBtn = document.getElementById('installBtn');
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.classList.remove('hidden');
     });
-  }
-  return { items };
-}
-
-/** == 제안 목록 == */
-function listIdeas() {
-  const sh = _sheet('Ideas');
-  const rows = sh.getDataRange().getValues(); // [date,user,title,content]
-  const items = [];
-  for (let r=1; r<rows.length; r++) {
-    const [date, user, title, content] = rows[r];
-    if (!title && !content) continue;
-    items.push({
-      date: date ? Utilities.formatDate(new Date(date), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '',
-      user: user ? String(user) : '',
-      title: title ? String(title) : '',
-      content: content ? String(content) : ''
+    installBtn?.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      installBtn.classList.add('hidden');
     });
-  }
-  return { items };
-}
 
-/** == 제보 제출 & 목록 == */
-function submitHazard(e) {
-  // multipart/form-data 로 전달됨: e.parameter.*, e.files.photo
-  const user = (e.parameter.user || '').toString();
-  const location = (e.parameter.location || '').toString();
-  const title = (e.parameter.title || '').toString();
-  const description = (e.parameter.description || '').toString();
-  const riskLevel = (e.parameter.riskLevel || '보통').toString();
+    // ======== 탭 전환 ========
+    const tabs = document.querySelectorAll('.tab');
+    const panes = document.querySelectorAll('.tab-pane');
+    function showTab(id) {
+      panes.forEach(p => p.classList.add('hidden-tab'));
+      document.getElementById(id)?.classList.remove('hidden-tab');
+    }
+    tabs.forEach(btn => btn.addEventListener('click', () => showTab(btn.dataset.target)));
+    // 기본 탭
+    showTab('tab-stats');
 
-  let photoId = '', photoUrl = '';
-  if (e.files && e.files.photo) {
-    // 단일 파일 업로드
-    const fileBlob = e.files.photo; // Blob
-    const folder = DriveApp.getFolderById(FOLDER_ID);
-    const file = folder.createFile(fileBlob);
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    photoId = file.getId();
-    photoUrl = 'https://drive.google.com/uc?export=view&id=' + photoId;
-  }
+    // ======== 공용 fetch 헬퍼 ========
+    async function apiGet(params) {
+      const url = new URL(API_BASE);
+      Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
+      const res = await fetch(url, { method: 'GET' });
+      if (!res.ok) throw new Error('API 오류');
+      return res.json();
+    }
+    async function apiPost(formData) {
+      const res = await fetch(API_BASE, { method: 'POST', body: formData });
+      if (!res.ok) throw new Error('API 오류');
+      return res.json();
+    }
 
-  const sh = _sheet('Hazards');
-  sh.appendRow([
-    new Date(), user, location, title, description, riskLevel, photoId, photoUrl
-  ]);
+    // ======== 재해통계 & KPI 렌더 ========
+    async function renderStats() {
+      try {
+        const data = await apiGet({ action: 'stats' });
+        // KPI 카드
+        const kpiWrap = document.getElementById('kpiCards');
+        kpiWrap.innerHTML = '';
+        const kpis = [
+          { label: '올해 재해건수', value: data.thisYearIncidents || 0 },
+          { label: '휴업 손실일', value: data.lostDays || 0 },
+          { label: '개선조치 진행', value: (data.actionsProgress||0) + '%' },
+          { label: '제안 접수', value: data.ideasCount || 0 },
+        ];
+        kpis.forEach(k => {
+          const card = document.createElement('div');
+          card.className = 'p-4 rounded-2xl border';
+          card.innerHTML = `<div class="text-slate-500 text-xs">${k.label}</div><div class="text-2xl font-bold">${k.value}</div>`;
+          kpiWrap.appendChild(card);
+        });
+        // 월별 차트
+        const ctx = document.getElementById('incidentsChart');
+        if (window._incChart) window._incChart.destroy();
+        window._incChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: data.months || [],
+            datasets: [{ label: '재해건수', data: data.incidentsByMonth || [] }]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
 
-  return { ok:true, photoUrl };
-}
+    // ======== 위험성평가 진행도 ========
+    async function renderRisk() {
+      try {
+        const data = await apiGet({ action: 'riskProgress' });
+        const bar = document.getElementById('riskProgressBar');
+        const txt = document.getElementById('riskProgressText');
+        const pct = Math.round(data.overall || 0);
+        bar.style.width = pct + '%';
+        txt.textContent = pct + '% 완료';
+        const ul = document.getElementById('deptProgress');
+        ul.innerHTML = '';
+        (data.byDept || []).forEach(row => {
+          const li = document.createElement('li');
+          li.innerHTML = `<span class='font-medium mr-2'>${row.dept}</span>${row.progress}%`;
+          ul.appendChild(li);
+        });
+      } catch (e) { console.error(e); }
+    }
 
-function listHazards() {
-  const sh = _sheet('Hazards');
-  const rows = sh.getDataRange().getValues(); // [timestamp,user,location,title,description,riskLevel,photoId,photoUrl]
-  const items = [];
-  for (let r=1; r<rows.length; r++) {
-    const [ts, user, location, title, description, riskLevel, , photoUrl] = rows[r];
-    if (!title && !description) continue;
-    items.push({
-      date: ts ? Utilities.formatDate(new Date(ts), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') : '',
-      user: user ? String(user) : '익명',
-      location: location ? String(location) : '',
-      title: title ? String(title) : '',
-      description: description ? String(description) : '',
-      riskLevel: riskLevel ? String(riskLevel) : '',
-      photoUrl: photoUrl ? String(photoUrl) : ''
+    // ======== 개선조치 현황 ========
+    async function renderActions() {
+      try {
+        const data = await apiGet({ action: 'actions' });
+        const tbody = document.getElementById('actionsBody');
+        tbody.innerHTML = '';
+        (data.items || []).forEach((r, i) => {
+          const tr = document.createElement('tr');
+          tr.className = 'border-b';
+          tr.innerHTML = `<td class='py-2 pr-4'>${i+1}</td>
+            <td class='py-2 pr-4'>${r.title}</td>
+            <td class='py-2 pr-4'>${r.owner||'-'}</td>
+            <td class='py-2 pr-4'>${r.due||'-'}</td>
+            <td class='py-2 pr-4'>${r.status||'-'}</td>`;
+          tbody.appendChild(tr);
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    // ======== 제안함 ========
+    async function renderIdeas() {
+      try {
+        const data = await apiGet({ action: 'ideas' });
+        const ul = document.getElementById('ideasList');
+        ul.innerHTML = '';
+        (data.items || []).forEach((r) => {
+          const li = document.createElement('li');
+          li.className = 'p-3 rounded-xl border bg-white';
+          li.innerHTML = `<div class='text-sm'><span class='font-medium'>${r.user||'익명'}</span> · <span class='text-slate-500'>${r.date||''}</span></div>
+            <div class='font-medium mt-1'>${r.title}</div>
+            <div class='text-sm text-slate-700 mt-1'>${r.content||''}</div>`;
+          ul.appendChild(li);
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    // ======== 제보 제출 ========
+    const form = document.getElementById('reportForm');
+    const msg = document.getElementById('reportMsg');
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        const fd = new FormData(form);
+        fd.append('action', 'submitHazard');
+        const res = await apiPost(fd);
+        msg.textContent = '제출되었습니다.';
+        msg.className = 'text-emerald-600';
+        form.reset();
+        await loadReports();
+      } catch (err) {
+        msg.textContent = '제출 실패. 잠시 후 다시 시도해 주세요';
+        msg.className = 'text-rose-600';
+      }
     });
-  }
-  // 최신이 위로 오도록 정렬
-  items.sort((a,b) => (a.date < b.date ? 1 : -1));
-  return { items };
-}
+
+    async function loadReports() {
+      try {
+        const data = await apiGet({ action: 'hazards' });
+        const ul = document.getElementById('reportsList');
+        ul.innerHTML = '';
+        (data.items || []).forEach((r) => {
+          const li = document.createElement('li');
+          li.className = 'p-3 rounded-xl border bg-white';
+          const photo = r.photoUrl ? `<a href='${r.photoUrl}' target='_blank' class='text-sky-600 underline'>사진보기</a>` : '';
+          li.innerHTML = `<div class='text-sm'><span class='font-medium'>${r.user||'익명'}</span> · <span class='text-slate-500'>${r.date||''}</span> · <span class='px-2 py-0.5 text-xs rounded-full bg-sky-100 text-sky-700'>${r.riskLevel||'-'}</span></div>
+            <div class='font-medium mt-1'>${r.title}</div>
+            <div class='text-sm text-slate-700 mt-1'>${r.description||''}</div>
+            <div class='text-xs text-slate-500 mt-1'>위치: ${r.location||''} ${photo? '· '+photo: ''}</div>`;
+          ul.appendChild(li);
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    // 초기 로드
+    (async () => {
+      await Promise.all([renderStats(), renderRisk(), renderActions(), renderIdeas(), loadReports()]);
+      // 서비스워커 등록 (파일 따로 생성 필요: sw.js)
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js').catch(console.error);
+      }
+    })();
+  </script>
+</body>
+</html>
