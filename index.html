@@ -1,0 +1,199 @@
+/** == 환경설정 == */
+const SPREADSHEET_ID = 'YOUR_SPREADSHEET_ID';   // ← 스프레드시트 ID
+const FOLDER_ID = 'YOUR_DRIVE_FOLDER_ID';       // ← 드라이브 폴더 ID
+
+/** == 공통 == */
+function _ss() { return SpreadsheetApp.openById(SPREADSHEET_ID); }
+function _sheet(name) { return _ss().getSheetByName(name); }
+function _json(obj, code) {
+  const out = ContentService.createTextOutput(JSON.stringify(obj));
+  out.setMimeType(ContentService.MimeType.JSON);
+  const resp = out;
+  return out;
+}
+function _cors(out) {
+  // Web App 레벨 CORS 허용(간단)
+  return out; // (Apps Script는 응답 헤더 제약이 있어, 프론트 fetch는 동일 URL로 직접 호출 권장)
+}
+
+/** == 라우팅 == */
+function doGet(e) {
+  const action = (e.parameter.action || '').toString();
+  try {
+    if (action === 'stats')     return _cors(_json(getStats()));
+    if (action === 'riskProgress') return _cors(_json(getRiskProgress()));
+    if (action === 'actions')   return _cors(_json(listActions()));
+    if (action === 'ideas')     return _cors(_json(listIdeas()));
+    if (action === 'hazards')   return _cors(_json(listHazards()));
+    return _cors(_json({ ok:false, error:'unknown action' }));
+  } catch(err) {
+    return _cors(_json({ ok:false, error:String(err) }, 500));
+  }
+}
+
+function doPost(e) {
+  const action = (e.parameter.action || '').toString();
+  try {
+    if (action === 'submitHazard') return _cors(_json(submitHazard(e)));
+    return _cors(_json({ ok:false, error:'unknown action' }));
+  } catch(err) {
+    return _cors(_json({ ok:false, error:String(err) }, 500));
+  }
+}
+
+/** == 통계 == */
+function getStats() {
+  const shInc = _sheet('Incidents');
+  let months = [], byMonth = [];
+  // 최근 12개월 라벨 만들기
+  const now = new Date();
+  for (let i=11; i>=0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    const label = Utilities.formatDate(d, Session.getScriptTimeZone(), 'YYYY-MM');
+    months.push(label);
+    byMonth.push(0);
+  }
+
+  // Incidents 집계
+  const range = shInc.getDataRange().getValues(); // [date,type,lostDays]
+  let thisYearIncidents = 0;
+  let lostDays = 0;
+  for (let r=1; r<range.length; r++) {
+    const [date, type, lost] = range[r];
+    if (!date) continue;
+    const dt = new Date(date);
+    const ym = Utilities.formatDate(new Date(dt.getFullYear(), dt.getMonth(), 1), Session.getScriptTimeZone(), 'YYYY-MM');
+    const idx = months.indexOf(ym);
+    if (idx >= 0) byMonth[idx] += 1;
+    if (dt.getFullYear() === now.getFullYear()) thisYearIncidents += 1;
+    if (lost) lostDays += Number(lost) || 0;
+  }
+
+  // 개선조치 진행률: Actions 시트에서 status == '완료' 비율
+  const shAct = _sheet('Actions');
+  const rowsAct = shAct.getDataRange().getValues(); // [title,owner,due,status]
+  let total=0, done=0;
+  for (let r=1; r<rowsAct.length; r++) {
+    if (!rowsAct[r][0]) continue;
+    total++;
+    if ((rowsAct[r][3]||'').toString().trim() === '완료') done++;
+  }
+  const actionsProgress = total ? Math.round((done/total)*100) : 0;
+
+  // 제안 수
+  const shIdeas = _sheet('Ideas');
+  const ideasValues = shIdeas.getDataRange().getValues();
+  const ideasCount = Math.max(ideasValues.length-1, 0);
+
+  return {
+    months: months,
+    incidentsByMonth: byMonth,
+    thisYearIncidents: thisYearIncidents,
+    lostDays: lostDays,
+    actionsProgress: actionsProgress,
+    ideasCount: ideasCount
+  };
+}
+
+/** == 위험성평가 진행도 == */
+function getRiskProgress() {
+  const sh = _sheet('RiskProgress');
+  const rows = sh.getDataRange().getValues(); // [dept,progress]
+  let list = [];
+  let sum = 0, n = 0;
+  for (let r=1; r<rows.length; r++) {
+    const dept = rows[r][0];
+    const prog = Number(rows[r][1]) || 0;
+    if (!dept && !prog) continue;
+    list.push({ dept: String(dept||''), progress: Math.max(0, Math.min(100, prog)) });
+    sum += prog; n++;
+  }
+  const overall = n ? sum/n : 0;
+  return { overall, byDept: list };
+}
+
+/** == 개선조치 목록 == */
+function listActions() {
+  const sh = _sheet('Actions');
+  const rows = sh.getDataRange().getValues(); // [title,owner,due,status]
+  const items = [];
+  for (let r=1; r<rows.length; r++) {
+    const [title, owner, due, status] = rows[r];
+    if (!title) continue;
+    items.push({
+      title: String(title),
+      owner: owner ? String(owner) : '',
+      due: due ? Utilities.formatDate(new Date(due), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '',
+      status: status ? String(status) : ''
+    });
+  }
+  return { items };
+}
+
+/** == 제안 목록 == */
+function listIdeas() {
+  const sh = _sheet('Ideas');
+  const rows = sh.getDataRange().getValues(); // [date,user,title,content]
+  const items = [];
+  for (let r=1; r<rows.length; r++) {
+    const [date, user, title, content] = rows[r];
+    if (!title && !content) continue;
+    items.push({
+      date: date ? Utilities.formatDate(new Date(date), Session.getScriptTimeZone(), 'yyyy-MM-dd') : '',
+      user: user ? String(user) : '',
+      title: title ? String(title) : '',
+      content: content ? String(content) : ''
+    });
+  }
+  return { items };
+}
+
+/** == 제보 제출 & 목록 == */
+function submitHazard(e) {
+  // multipart/form-data 로 전달됨: e.parameter.*, e.files.photo
+  const user = (e.parameter.user || '').toString();
+  const location = (e.parameter.location || '').toString();
+  const title = (e.parameter.title || '').toString();
+  const description = (e.parameter.description || '').toString();
+  const riskLevel = (e.parameter.riskLevel || '보통').toString();
+
+  let photoId = '', photoUrl = '';
+  if (e.files && e.files.photo) {
+    // 단일 파일 업로드
+    const fileBlob = e.files.photo; // Blob
+    const folder = DriveApp.getFolderById(FOLDER_ID);
+    const file = folder.createFile(fileBlob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    photoId = file.getId();
+    photoUrl = 'https://drive.google.com/uc?export=view&id=' + photoId;
+  }
+
+  const sh = _sheet('Hazards');
+  sh.appendRow([
+    new Date(), user, location, title, description, riskLevel, photoId, photoUrl
+  ]);
+
+  return { ok:true, photoUrl };
+}
+
+function listHazards() {
+  const sh = _sheet('Hazards');
+  const rows = sh.getDataRange().getValues(); // [timestamp,user,location,title,description,riskLevel,photoId,photoUrl]
+  const items = [];
+  for (let r=1; r<rows.length; r++) {
+    const [ts, user, location, title, description, riskLevel, , photoUrl] = rows[r];
+    if (!title && !description) continue;
+    items.push({
+      date: ts ? Utilities.formatDate(new Date(ts), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') : '',
+      user: user ? String(user) : '익명',
+      location: location ? String(location) : '',
+      title: title ? String(title) : '',
+      description: description ? String(description) : '',
+      riskLevel: riskLevel ? String(riskLevel) : '',
+      photoUrl: photoUrl ? String(photoUrl) : ''
+    });
+  }
+  // 최신이 위로 오도록 정렬
+  items.sort((a,b) => (a.date < b.date ? 1 : -1));
+  return { items };
+}
