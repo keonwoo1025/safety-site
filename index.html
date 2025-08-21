@@ -47,9 +47,7 @@
     <section id="tab-stats" class="tab-pane bg-white rounded-2xl p-4 shadow">
       <h2 class="font-semibold mb-3">재해통계 (월별)</h2>
       <canvas id="incidentsChart" height="120"></canvas>
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4" id="kpiCards">
-        <!-- KPI 카드 자동 렌더링 -->
-      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4" id="kpiCards"></div>
     </section>
 
     <!-- 위험성평가 진행도 -->
@@ -149,7 +147,7 @@
 
   <script>
     // ======== 환경설정: 본인의 Apps Script 웹앱 URL 로 교체 ========
-    const API_BASE = "https://script.google.com/macros/s/AKfycbzCOjxsnqwlPpkfbyze2HqThgms6n4z46qKVJTB7j52FGGvJQUvz65w6AhKSi7a4yS-JA/exec"; // 예: https://script.google.com/macros/s/AKfycb.../exec
+    const API_BASE = "https://script.google.com/macros/s/여기에_앱스크립트_URL/exec";
 
     // ======== PWA 설치 버튼 ========
     let deferredPrompt;
@@ -175,7 +173,6 @@
       document.getElementById(id)?.classList.remove('hidden-tab');
     }
     tabs.forEach(btn => btn.addEventListener('click', () => showTab(btn.dataset.target)));
-    // 기본 탭
     showTab('tab-stats');
 
     // ======== 공용 fetch 헬퍼 ========
@@ -196,7 +193,6 @@
     async function renderStats() {
       try {
         const data = await apiGet({ action: 'stats' });
-        // KPI 카드
         const kpiWrap = document.getElementById('kpiCards');
         kpiWrap.innerHTML = '';
         const kpis = [
@@ -208,23 +204,17 @@
         kpis.forEach(k => {
           const card = document.createElement('div');
           card.className = 'p-4 rounded-2xl border';
-          card.innerHTML = <div class="text-slate-500 text-xs">${k.label}</div><div class="text-2xl font-bold">${k.value}</div>;
+          card.innerHTML = `<div class="text-slate-500 text-xs">${k.label}</div><div class="text-2xl font-bold">${k.value}</div>`;
           kpiWrap.appendChild(card);
         });
-        // 월별 차트
         const ctx = document.getElementById('incidentsChart');
         if (window._incChart) window._incChart.destroy();
         window._incChart = new Chart(ctx, {
           type: 'line',
-          data: {
-            labels: data.months || [],
-            datasets: [{ label: '재해건수', data: data.incidentsByMonth || [] }]
-          },
+          data: { labels: data.months || [], datasets: [{ label: '재해건수', data: data.incidentsByMonth || [] }] },
           options: { responsive: true, maintainAspectRatio: false }
         });
-      } catch (e) {
-        console.error(e);
-      }
+      } catch (e) { console.error(e); }
     }
 
     // ======== 위험성평가 진행도 ========
@@ -240,7 +230,7 @@
         ul.innerHTML = '';
         (data.byDept || []).forEach(row => {
           const li = document.createElement('li');
-          li.innerHTML = <span class='font-medium mr-2'>${row.dept}</span>${row.progress}%;
+          li.innerHTML = `<span class='font-medium mr-2'>${row.dept}</span>${row.progress}%`;
           ul.appendChild(li);
         });
       } catch (e) { console.error(e); }
@@ -255,11 +245,11 @@
         (data.items || []).forEach((r, i) => {
           const tr = document.createElement('tr');
           tr.className = 'border-b';
-          tr.innerHTML = <td class='py-2 pr-4'>${i+1}</td>
+          tr.innerHTML = `<td class='py-2 pr-4'>${i+1}</td>
             <td class='py-2 pr-4'>${r.title}</td>
             <td class='py-2 pr-4'>${r.owner||'-'}</td>
             <td class='py-2 pr-4'>${r.due||'-'}</td>
-            <td class='py-2 pr-4'>${r.status||'-'}</td>;
+            <td class='py-2 pr-4'>${r.status||'-'}</td>`;
           tbody.appendChild(tr);
         });
       } catch (e) { console.error(e); }
@@ -274,32 +264,57 @@
         (data.items || []).forEach((r) => {
           const li = document.createElement('li');
           li.className = 'p-3 rounded-xl border bg-white';
-          li.innerHTML = <div class='text-sm'><span class='font-medium'>${r.user||'익명'}</span> · <span class='text-slate-500'>${r.date||''}</span></div>
+          li.innerHTML = `<div class='text-sm'><span class='font-medium'>${r.user||'익명'}</span> · <span class='text-slate-500'>${r.date||''}</span></div>
             <div class='font-medium mt-1'>${r.title}</div>
-            <div class='text-sm text-slate-700 mt-1'>${r.content||''}</div>;
+            <div class='text-sm text-slate-700 mt-1'>${r.content||''}</div>`;
           ul.appendChild(li);
         });
       } catch (e) { console.error(e); }
     }
 
-    // ======== 제보 제출 ========
-    const form = document.getElementById('reportForm');
-    const msg = document.getElementById('reportMsg');
-    form?.addEventListener('submit', async (e) => {
+    // ======== 제보 제출 + 사진 업로드 ========
+    const reportForm = document.getElementById('reportForm');
+    const reportMsg = document.getElementById('reportMsg');
+
+    reportForm?.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
-        const fd = new FormData(form);
-        fd.append('action', 'submitHazard');
-        const res = await apiPost(fd);
-        msg.textContent = '제출되었습니다.';
-        msg.className = 'text-emerald-600';
-        form.reset();
-        await loadReports();
-      } catch (err) {
-        msg.textContent = '제출 실패. 잠시 후 다시 시도해 주세요';
-        msg.className = 'text-rose-600';
+        const photoFile = reportForm.querySelector('input[name="photo"]')?.files[0];
+        let photoUrl = "";
+
+        if(photoFile){
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const base64 = reader.result.split(",")[1];
+            const res = await fetch(API_BASE, {
+              method: "POST",
+              body: JSON.stringify({action:"uploadPhoto", fileName: photoFile.name, fileBlob: base64})
+            });
+            const json = await res.json();
+            photoUrl = json.url || "";
+            await submitHazard(photoUrl);
+          };
+          reader.readAsDataURL(photoFile);
+        } else {
+          await submitHazard("");
+        }
+      } catch(err) {
+        console.error(err);
+        reportMsg.textContent = "제출 실패. 잠시 후 다시 시도해 주세요.";
+        reportMsg.className = "text-rose-600";
       }
     });
+
+    async function submitHazard(photoUrl){
+      const fd = new FormData(reportForm);
+      fd.append("action","submitHazard");
+      fd.append("photoUrl", photoUrl);
+      await fetch(API_BASE, {method:"POST", body: fd});
+      reportMsg.textContent = "제출되었습니다.";
+      reportMsg.className = "text-emerald-600";
+      reportForm.reset();
+      await loadReports();
+    }
 
     async function loadReports() {
       try {
@@ -309,23 +324,20 @@
         (data.items || []).forEach((r) => {
           const li = document.createElement('li');
           li.className = 'p-3 rounded-xl border bg-white';
-          const photo = r.photoUrl ? <a href='${r.photoUrl}' target='_blank' class='text-sky-600 underline'>사진보기</a> : '';
-          li.innerHTML = <div class='text-sm'><span class='font-medium'>${r.user||'익명'}</span> · <span class='text-slate-500'>${r.date||''}</span> · <span class='px-2 py-0.5 text-xs rounded-full bg-sky-100 text-sky-700'>${r.riskLevel||'-'}</span></div>
+          const photo = r.photoUrl ? `<a href='${r.photoUrl}' target='_blank' class='text-sky-600 underline'>사진보기</a>` : '';
+          li.innerHTML = `<div class='text-sm'><span class='font-medium'>${r.user||'익명'}</span> · <span class='text-slate-500'>${r.date||''}</span> · <span class='px-2 py-0.5 text-xs rounded-full bg-sky-100 text-sky-700'>${r.riskLevel||'-'}</span></div>
             <div class='font-medium mt-1'>${r.title}</div>
             <div class='text-sm text-slate-700 mt-1'>${r.description||''}</div>
-            <div class='text-xs text-slate-500 mt-1'>위치: ${r.location||''} ${photo? '· '+photo: ''}</div>;
+            <div class='text-xs text-slate-500 mt-1'>위치: ${r.location||''} ${photo? '· '+photo: ''}</div>`;
           ul.appendChild(li);
         });
       } catch (e) { console.error(e); }
     }
 
-    // 초기 로드
+    // ======== 초기 로드 ========
     (async () => {
       await Promise.all([renderStats(), renderRisk(), renderActions(), renderIdeas(), loadReports()]);
-      // 서비스워커 등록 (파일 따로 생성 필요: sw.js)
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('./sw.js').catch(console.error);
-      }
+      if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.error);
     })();
   </script>
 </body>
